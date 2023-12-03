@@ -1,0 +1,368 @@
+---
+title: "R Training Quick Start"
+output: html_notebook
+---
+
+Welcome to using R! In this training I will help you in two ways so you can start using R to be successful in your job and the business. First I will show you how to get started by knowing those most needed basics within our QBE environment. Second, I as a SAS Programmer will show you how I transition to be a R Programmer too. 
+
+
+-----------------------------------------------------------------------
+
+Let's get started. First you need to access and sign into the R Server. Click on this link in order to sign into R Studio with your Windows Login.
+http://austlapplu0013.qbe.com.au:8787/
+
+
+Now that you are in, let's get familiar with the our workspace and some of the best practices I found to be helpful.
+
+1. R Notebook
+2. R Server directoy (personal and shared)
+3. Create a R Project to manage your work
+4. Bitbucket (will cover in a seperate training)
+
+-----------------------------------------------------------------------
+
+
+Setting up your environment
+
+Now we need to get to the fun part and execute some code. First, I start with installing any packages that are not currently installed. I like to list them up front in case it is something new. 
+
+
+
+```{r}
+# Install packages. You can add the names to the list. You can also installed them directly in the Package tab. 
+install.packages(c("ggplot2", "e1071", "caret", "quanteda", "irlba", "randomForest"))
+```
+
+
+Next, you would need to load your libaries for the packages that you would need for your program. Here are the ones I have been using. 
+```{r}
+library(RJDBC)
+library(openxlsx)
+library(dplyr)
+library(lubridate)
+library(plyr)
+library(readr)
+library(stringr)
+library(doSNOW)
+library(ggplot2)
+library(e1071)
+library(caret)
+library(quanteda)
+library(irlba)
+library(randomForest)
+library(zoo)
+```
+
+Now I want to get data from our Data Warehouse (DWH). In order to do that I need to first save a code into my home directory where I would keep my password. Your home directory is restricted so no others can read it. You only need to do this the first time. When your password changes you need to update this code. 
+```{r}
+
+# Create a R Script, copy this code, insert your user name & password for the DWH, and save the file "Database_Connectivity.R". 
+library("RJDBC")
+
+jcc = JDBC("com.ibm.db2.jcc.DB2Driver","/data/shared/marcopolo/11 Business streams/4 Business process/ETL/dev/AntiFraudFeed/db2jcc4.jar")
+conn = dbConnect(jcc, "jdbc:db2://P1ASAWH.au.qbe.pri:60004/P1ASAWH",
+                 user="201126",
+                 password="XXXXXXX")
+```
+
+To make a connectition to the DWH run the following code. It is important that your working directory is in your personal folder which is the normal case when you sign in. 
+```{r}
+# Connect to db2
+options(java.parameters = "-Xms20g") 
+source("~/Database_Connectivity.R")
+
+```
+
+A working directory is like a "libname in SAS." This is where you will save your files. You should decide if this will be in our personal directory or a shared space. For this training, you can use this directory in the R Server: /data/shared/R Training/(user ID) -- create your own folder.
+```{r}
+#Set Working Directory
+setwd("/data/shared/R Training/trainer")
+```
+
+Now you are set to pull data from the DWH. You can use SQL just like you did with Proc SQL in R. Let's look at the part of the code. If you have a working SQL code you can just copy it into here. Just makesure your schemas are defined. This is also where you can modify the DXC P400 SQL so you can pull the data from the DWH directly. 
+
+
+```{r}
+
+FACT_RETENTION <- dbGetQuery(conn, "
+SELECT 
+r.*,
+a.CHANNEL_SUB_TYPE_1
+
+
+FROM 
+HKGDW.FACT_RETENTION r
+join HKGDW.DIM_ACCOUNT a on a.ACCOUNT_NO=r.AGENT_NO
+
+WHERE 
+year(r.RENEWAL_DATE) >= 2020
+and r.RENEWAL_DATE<='2021-03-31' 
+and a.CHANNEL_SUB_TYPE_1='MANULIFE'
+and r.CURRENCY='HKD'
+")
+
+```
+
+Sometimes you need you need to pull data from all the countries' schemas. Here is a way you can run one SQL just the same way you would write a SAS Macro. 
+
+1. Create a list of the countries you need to extract data from.
+2. Initiate a dataset that you will combine all the countries data into. 
+3. Create a For Loop
+4. Use the paste function in order to insert 'country' variable into your SQL.
+```{r}
+
+countrylist = list('SGP','HKG','HGI','MAC','MYS','VNM')
+CHANNELS = NULL
+for (country in countrylist)
+{
+  data = dbGetQuery(conn,
+                    paste("
+select 
+c.COUNTRY_CD as country_code,
+c.ACCOUNT_NO as AGENT_NUMBER,
+c.CHANNEL_MAIN_TYPE,
+cm.CHANNEL_MAIN_TYPE_DESC,
+c.CHANNEL_SUB_TYPE_1,
+cs1.CHANNEL_SUB_TYPE_1_DESC
+
+from 
+",country,"DW.DIM_ACCOUNT c,
+",country,"DW.DIM_CHANNEL_MAIN_TYPE cm,
+",country,"DW.DIM_CHANNEL_SUB_TYPE_1 cs1
+
+where
+c.CHANNEL_MAIN_TYPE = cm.CHANNEL_MAIN_TYPE
+and c.CHANNEL_SUB_TYPE_1 = cs1.CHANNEL_SUB_TYPE_1
+", sep = ''))
+  CHANNELS = rbind(CHANNELS,data)
+  rm(data)
+  gc()
+}
+```
+
+Sometimes I found some SQL codes to be too long. So another strategy you can use is to save it as seperate R scripts and then use the 'source' function to read in each program and then execute it. 
+```{r}
+# Extract Claims Data Country_OTHER_LR_with_split and write to csv for each country
+countrylist = list('MAC','MYS','VNM','HGI','SGP','HKG')
+for (country in countrylist)
+{
+  print(paste(country,"start time: ",Sys.time()))
+  source(paste(country,"_OTHER_LR_SQL.R", sep = ''))  
+  write.csv(OTHER_LR,paste(country,"_OTHER_LR_with_SPLIT.csv", sep=''))
+  rm(OTHER_LR)
+  gc()
+  print(paste(country,"end time: ",Sys.time()))
+}
+
+```
+
+
+We got data now! It is time to manipulate it to serve our purposes. There are times when you need to take granular/detail data and aggregrate it to a higher level like premium class level to policy level. Use DPLYR package is like R version of SQL. There is a whole training that you should watch on Data Science Dojo. https://online.datasciencedojo.com/course/Introduction-to-dplyr
+
+In this code I am taking premium class level data and aggregating it to the Policy and renewal period level. Here are some key things you need to know to translate from SQL to DPLYR. 
+1. There is another package, "plyr", that sometimes conflicts with "dplyr" so you may need to uninstall it. 
+2. You start with the data frame that you are going to aggregate. It is like the "FROM" statement
+3. group_by() is just like "GROUP BY" statement in SQL. You need to define this earlier in the flow. 
+4. summarise() is where you would define the aggregation functions. n() is like count(*). SUM() and MAX() are the same as in SQL.
+5. filter() is like the "WHERE" statement. 
+
+This is not an exausted list of capabilites so do the training and learn new tricks. 
+
+```{r}
+# Aggreate the FACT_RETENTION to the CONTRACT_NO, RENEWAL_NO, CONTRACT_COMMENCE_DATE, RENEWAL_DATE
+detach("package:plyr", unload = TRUE)
+FACT_RETENTION_POLICY<-FACT_RETENTION%>%group_by(CONTRACT_NO,RENEWAL_NO,CONTRACT_COMMENCE_DATE,RENEWAL_DATE,AGENT_NO)%>%summarise(TARGET_IS_RENEWED=max(IS_RENEWED),
+                           PREM_RISK_NUM=n(),
+                          EXPIRING_GWP_POSTED=sum(TOTAL_PREMIUM_POSTED),
+                           RENEWED_GWP_POSTED=sum(RENEWAL_TOTAL_PREMIUM_POSTED))%>%filter(year(as.Date(RENEWAL_DATE))>=2020)
+```
+
+Merging data is more simpler than SAS as you do not need to sort. Use the inner_join function and list the two data frames you want to merge. R will detect the common keys that it would use for the join. 
+
+```{r}
+# Inner Join Example without defining joining keys
+
+ACCOUNT_NO_INCLUDE<-FACT_RETENTION_POLICY%>%group_by(AGENT_NO)%>%summarise(POLICY_NUM_IN_SAMPLE=n()) # Create a list of ACCOUNT_NO from the FACT_RETENTION_POLICY that would be used for the model
+ACCOUNT_NO_FACT_RETENTION=inner_join(FACT_RETENTION,ACCOUNT_NO_INCLUDE) # Subset all policies from ACCOUNT_NO_INCLUDE from FACT_RETENTION
+
+
+# Inner Join example where the keys are defined. 
+temp_fpt_quote_no<-inner_join(temp_fpt_quote_no,FACT_REFERRAL,by = c("COUNTRY_CODE", "QUOTE_POLICY_NO", "TRAN_NO")) #Merge with referals by QUOTE_POLICY_NO
+
+
+```
+
+left_join() function should be used for left outer joins. 
+```{r}
+# Left Join example where the keys are defined when the fields have different name. 
+TRIGGER_MONTHS<-left_join(TRIGGER_MONTHS,ACCOUNT_NO_LM_TOTAL,by=c("ACCOUNT_NO"="AGENT_NO","TRIGGER_YM"="TRIGGER_YM"))
+
+# Sometimes if there are duplicate fields in both datasets a suffix like ".x" or ".y" is added. Sometimes you would want to exclude using this code. The "-" in front of the field name will get excluded. 
+TRIGGER_MONTHS<-select(TRIGGER_MONTHS,-target_expring_month,-target_expring_month.y,-target_expring_month.x)
+```
+
+Rename fields in a data frame
+```{r}
+temp_fpt_quote_no<-plyr::rename(temp_fpt_quote_no,c("CHDR_NO.x"="CHDR_NO")) #Rename back to CHDR_NO
+```
+
+
+
+In order to combine two data frames with the same set of columns use the rbind() function to concact them together. 
+```{r}
+#Append records to the TOTAL dataset
+ACCOUNT_NO_LM_TOTAL=rbind(ACCOUNT_NO_LM_TOTAL,ACCOUNT_NO_LM)
+```
+
+To create a new field into a dataframe you would type the dataframe name + $ + name of the new field. Then assign the value to the new field with "<-".
+```{r}
+#Calculate the number of months during the policy in order to create the trigger months for the model.
+FACT_RETENTION_POLICY$POLICY_MONTHS<-interval(as.Date(FACT_RETENTION_POLICY$CONTRACT_COMMENCE_DATE),as.Date(FACT_RETENTION_POLICY$RENEWAL_DATE)) %/% months(1) 
+
+```
+
+Another way to create a new field is the mutate() function. This is good to use with dplyr.
+```{r}
+# Last 12 Months Data Points
+L12_START_DATE<-floor_date(target_expring_month)-months(12)
+L12_END_DATE<-floor_date(target_expring_month)-days(1)
+ACCOUNT_NO_L12<-ACCOUNT_NO_FACT_RETENTION_POLICY %>%filter(RENEWAL_DATE>=L12_START_DATE & RENEWAL_DATE <=L12_END_DATE)%>%group_by(AGENT_NO)%>%summarise(
+    L12_EXPIRING_POLICIES_NUM=n(),
+    L12_EXPIRING_GWP_POSTED=sum(EXPIRING_GWP_POSTED),
+    L12_RENEWED_POLICIES_NUM=sum(TARGET_IS_RENEWED),
+    L12_RENEWED_GWP_POSTED=sum(RENEWED_GWP_POSTED)
+  )%>%mutate(L12_POLICY_RENEWAL_RATE=L12_RENEWED_POLICIES_NUM/L12_EXPIRING_POLICIES_NUM)
+```
+
+Case When function is another way to define values into a field. 
+```{r}
+CLIENT_SEGMENTATION <- CLIENT_SEGMENTATION %>%
+  mutate(CLIENT_SEGMENT = case_when(
+    CLIENT_SEGMENT=='XXXXXXXXX' & WCC_NO_EMP_CORP_IND == 1 ~ 'CORPORATE',
+    CLIENT_SEGMENT=='XXXXXXXXX' & WCC_NO_EMP_CORP_IND == 0 ~ 'SME',
+    TRUE ~ CLIENT_SEGMENT)) # For all other cases, client segment retains its original value
+```
+
+
+The ifthen() function is another way to define values into a field. 
+```{r}
+# In this example, assigns "Greece" to the country field when this condition is true otherwise assigns the country value.
+wine$country=ifelse(wine$designation == "Askitikos","Greece",wine$country)
+```
+
+I found this code also helpful when I needed to change missing values (NA) to a zero. This method was more effective way to reassign a value than an if then approach. 
+```{r}
+# Change REFERRAL_IND with NA to 0 meaning no referral
+QNECT_TRANSACTIONS$REFERRAL_IND[which(is.na(QNECT_TRANSACTIONS$REFERRAL_IND))]<-0
+```
+
+In order to convert data types you would need to use functions like as.Date(), as.character(), and as.numeric(). Also can apply the format() to assign a format like for dates. 
+
+```{r}
+#Convert date fields into date type from character
+ACCOUNT_NO_FACT_RETENTION_POLICY$RENEWAL_DATE<-as.Date(ACCOUNT_NO_FACT_RETENTION_POLICY$RENEWAL_DATE)
+
+# Applied formats for numeric and characters. 
+  temp$PREM_RISK_NUM<-as.numeric(FACT_RETENTION_POLICY$PREM_RISK_NUM)
+  temp$ACCOUNT_NO<-as.character(FACT_RETENTION_POLICY$AGENT_NO) 
+ 
+# Apply formt() on dates   
+  temp$CONTRACT_COMMENCE_DATE<-format(as.Date(FACT_RETENTION_POLICY$CONTRACT_COMMENCE_DATE),"%Y-%m-%d") #Convert to a date type
+  
+```
+
+Text character functions
+```{r}
+#SUBSTR
+SCVExtract$COUNTRY_CD<-substring(SCVExtract$SYSTEM,6,3)
+
+#CONTACT two Text fields
+SCVExtract$KEY<-paste(SCVExtract$COUNTRY_CD,SCVExtract$CLIENT_ID)
+
+# Calculates the length of a text field
+spam_raw$TestLength<-nchar(spam_raw$Text, type="bytes") #nchar counts the length of the test
+```
+
+Coalese
+```{r}
+# Selects a non-missing field
+DM_ANZSIC_CODES$ANZSIC<-coalesce(DM_ANZSIC_CODES$BUS_ANZSIC,DM_ANZSIC_CODES$BIZ_ANZSIC,DM_ANZSIC_CODES$WRK_ANZSIC)
+```
+
+
+
+In order to parse a character field hat contains a list of values like "ZU02 : ZR08 : ZR08" seperated by a delimter, use the strsplit() function. It would return a "list" data type. 
+```{r}
+# Extract Referral Reason
+QNECT_SUBMISSIONS$reason_list<-strsplit(QNECT_SUBMISSIONS$REFERRAL_REASON," : ")
+```
+
+
+If-Then, For Loop, and Arrays Control structures. Best to read the help for the technical details. 
+
+1. IF-Then: if (condition) {action} else {action}
+2. For Loop: for (counter in start:end) {action}
+3. field[position]
+```{r}
+
+# This code shows both If-Then, For Loop and arrays control structure. 
+REASONS = NULL
+temp = NULL
+for (i in 1:length(QNECT_SUBMISSIONS$reason_list)) {
+  if (QNECT_SUBMISSIONS$REFERRAL_IND[i]==1) {
+  temp$COUNTRY_CODE<-as.character(QNECT_SUBMISSIONS$COUNTRY_CODE[i])
+  temp$CHDR_NO<-as.character(QNECT_SUBMISSIONS$CHDR_NO[i])
+  temp$TRAN_NO<-as.character(QNECT_SUBMISSIONS$TRAN_NO[i])
+  temp$REFERRAL_STATUS<-as.character(QNECT_SUBMISSIONS$REFERRAL_STATUS[i])
+  temp$AGENT_NAME<-as.character(QNECT_SUBMISSIONS$AGENT_NAME[i])
+  if(length(unlist(QNECT_SUBMISSIONS$reason_list[i]))>0){
+    for (j in 1:length(unlist(QNECT_SUBMISSIONS$reason_list[i]))) {
+      temp$REFERRAL_REASON_CODE_NUM<-j
+      temp$REFERRAL_REASON_CODE<-as.character(QNECT_SUBMISSIONS$reason_list[[i]][[j]]) 
+      REASONS=rbind(REASONS,unlist(temp))  
+    }
+  } else {
+    temp$REFERRAL_REASON_CODE_NUM<-1
+    temp$REFERRAL_REASON_CODE<-as.character("MISS") 
+    REASONS=rbind(REASONS,unlist(temp))  
+  }
+  }
+}
+```
+
+Functions can be used similiarly to a SAS Macro program
+```{r}
+add.vect.df <-function(df,vect){
+  new.df <- cbind(df,vect)
+  return(new.df)
+}
+add.vect.df(income, income.level)
+```
+
+
+
+
+When you finish your work you may want to use these functions to save and publish your work.
+
+1. To save your dataframes, use the save() function. 
+2. Load() function would let you retrive the save dataframe. 
+3. file.copy() function would allow you to transfer the data frame to the network server in the mounted file. 
+4. write.csv() function converts the data frame to a csv file. 
+```{r}
+# Save to R Data Frames
+save(FACT_RETENTION_POLICY,file="FACT_RETENTION_POLICY.Rda")
+
+# Load the R Data Frames into the R environment. 
+load("FACT_RETENTION_POLICY.Rda")
+
+# Copy a file to a different location.
+file.copy("FACT_RETENTION.Rda","/data/shared/marcopolo/3.0 Analyse & Design/3.3 Detailed Requirements/Tableau Repository/Docs/FACT_RETENTION.Rda", overwrite = TRUE)
+
+# Write the data frame into a csv fule. 
+write.csv(extract,paste(country,"_Top5_CLAIM.csv", sep=''))
+
+
+```
+
+
+
